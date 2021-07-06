@@ -233,6 +233,9 @@ Resources:
         Value: lb_cookie
       - Key: stickiness.lb_cookie.duration_seconds
         Value: '30'
+      - Key: deregistration_delay.timeout_seconds
+        Value: '30'  
+        
   WebServerGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     #DeletionPolicy: Retain
@@ -701,13 +704,19 @@ Resources:
                         asg.delete_auto_scaling_group(AutoScalingGroupName=old_asg_group_name,ForceDelete=True)
                   elif event['RequestType'] == 'Delete':
                       print("Recieved Delete Event...")
-                      deployment_group_detail = codedeploy.get_deployment_group(applicationName=app_name,deploymentGroupName=deployment_group_name)
-                      asgname = deployment_group_detail['deploymentGroupInfo']['autoScalingGroups'][0]['name']
-                      asg_details = asg.describe_auto_scaling_groups( AutoScalingGroupNames=[asgname ,] )
-                      launch_config_name = asg_details['AutoScalingGroups'][0]['LaunchConfigurationName']
-                      asg.delete_launch_configuration(LaunchConfigurationName=launch_config_name,)
-                      print("Deleting Auto Scaling Group")
-                      asg_name = asg.delete_auto_scaling_group(AutoScalingGroupName=asgname,ForceDelete=True)
+                      try:
+                        deployment_group_detail = codedeploy.get_deployment_group(applicationName=app_name,deploymentGroupName=deployment_group_name)
+                        list_deploy_detail = codedeploy.list_deployments(applicationName=app_name,deploymentGroupName=deployment_group_name,includeOnlyStatuses=['Failed','Succeeded','Stopped'])
+                        i = 0
+                        for deployments in list_deploy_detail:
+                          depid = list_deploy_detail['deployments'][i]
+                          deploy_detail = codedeploy.get_deployment(deploymentId=depid)
+                          asgname = deploy_detail['deploymentInfo']['targetInstances']['autoScalingGroups'][0]
+                          print("Deleting Auto Scaling Group")
+                          asg.delete_auto_scaling_group(AutoScalingGroupName=asgname,ForceDelete=True)  
+                          i +=1     
+                      except IndexError:
+                          print("nothing to delete")                         
                       deployment_group_id = deployment_group_detail['deploymentGroupInfo']['deploymentGroupId']
                       response = delete_action(app_name, deployment_group_name)
                       sendResponse(event, context, deployment_group_id , "SUCCESS", response)
@@ -723,6 +732,8 @@ Resources:
                   elif e.response['Error']['Code'] == 'DeploymentGroupDoesNotExistException':	
                       sendResponse(event,context,'success',"SUCCESS",e.response)
                   elif e.response['Error']['Code'] == 'ValidationError':	
+                      sendResponse(event,context,'success',"SUCCESS",e.response)
+                  elif e.response['Error']['Code'] == 'ResourceInUse':	
                       sendResponse(event,context,'success',"SUCCESS",e.response)                      
                   else:
                       print("printing error")
